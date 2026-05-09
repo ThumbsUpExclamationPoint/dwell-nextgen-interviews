@@ -67,6 +67,15 @@ APPS_SCRIPT_URL = (
     "AKfycbwR5S1t1Fm-R56bHShMraOn5BOEC5EgR4htd7fOuTT8UDdtQdJZ2_cqrfXRKISBS6pG/exec"
 )
 
+# Claude API — Anthropic. Cleanup uses Haiku (fast, cheap, mechanical task);
+# synthesis uses Opus (best judgment for stitching themes across reviewers
+# in Jenny's voice). Key lives at ~/.config/dwell/anthropic_key.
+ANTHROPIC_KEY_PATH = Path.home() / ".config" / "dwell" / "anthropic_key"
+ANTHROPIC_API_URL  = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_VERSION  = "2023-06-01"
+CLEANUP_MODEL      = "claude-haiku-4-5"
+SYNTHESIS_MODEL    = "claude-opus-4-6"
+
 # First line of every .txt sidecar marks whether the transcript was
 # successfully appended to the candidate's Reviewer Reflections Doc.
 # Two possible states:
@@ -246,6 +255,159 @@ def find_ffmpeg() -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Claude — cleanup + synthesis
+# ---------------------------------------------------------------------------
+
+def load_anthropic_key() -> str | None:
+    """Read the Anthropic API key from ~/.config/dwell/anthropic_key,
+    falling back to the ANTHROPIC_API_KEY env var. Returns None if neither
+    is set — the caller decides whether to fail or skip."""
+    if ANTHROPIC_KEY_PATH.exists():
+        key = ANTHROPIC_KEY_PATH.read_text().strip()
+        if key:
+            return key
+    return os.environ.get("ANTHROPIC_API_KEY") or None
+
+
+def call_claude(api_key: str, model: str, system: str, user: str,
+                max_tokens: int = 4096) -> str:
+    """Single-turn Anthropic Messages API call. Returns the assistant's
+    text. Raises RuntimeError on non-2xx response."""
+    resp = requests.post(
+        ANTHROPIC_API_URL,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        },
+        json={
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        },
+        timeout=120,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"Anthropic {resp.status_code}: {resp.text[:400]}")
+    payload = resp.json()
+    parts = payload.get("content", [])
+    text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+    return text.strip()
+
+
+CLEANUP_SYSTEM = (
+    "You clean up Whisper-generated voice transcripts. Your only job is to "
+    "fix mechanical errors so the text reads as natural prose:\n"
+    "  • Add missing punctuation and capitalization.\n"
+    "  • Fix obvious homophones and misheard words from context.\n"
+    "  • Remove pure filler ('um', 'uh', 'like', 'you know') unless it's load-bearing.\n"
+    "  • Repair sentence boundaries Whisper smashed together.\n"
+    "Do NOT paraphrase, summarize, reorganize, or add content. Preserve the speaker's\n"
+    "voice, hedges, repetitions for emphasis, and order of thought. If the speaker\n"
+    "self-corrects mid-sentence, keep the corrected version.\n"
+    "Return only the cleaned text — no preamble, no quotes, no markdown."
+)
+
+
+def cleanup_transcript(api_key: str, raw: str) -> str:
+    """Send a raw Whisper transcript through Claude Haiku for cleanup.
+    Returns the cleaned text. On failure, returns the raw input."""
+    if not raw.strip():
+        return raw
+    try:
+        return call_claude(api_key, CLEANUP_MODEL, CLEANUP_SYSTEM, raw,
+                           max_tokens=2048)
+    except Exception as e:
+        print(f"      cleanup failed, using raw transcript: {e}", flush=True)
+        return raw
+
+
+SYNTHESIS_SYSTEM = """You are Jenny, Chief of Staff to Matt Stephan at Dwell Church of the Peninsula. You are writing a synthesis of voice reflections from the search team about a candidate for Next Gen Director.
+
+Voice rules:
+- Dry, not formulaic. Short sentences over long ones. No throat-clearing, no recap of the method, no "great question," no "here's a summary."
+- Lead with the finding, not the method.
+- Name the actual risk or next move in plain language.
+- Wry is OK. A bit is not. Drop dryness for genuinely heavy content.
+- One sincere note per section is plenty; two is sycophancy.
+- No exclamation points outside quotes.
+- Don't sign — this is an internal tracking note, not correspondence.
+
+Output format — markdown-ish, parsed by an Apps Script that recognizes:
+- "## " prefix → Heading 2
+- "[ ... ]" wrapped line → italic-grey meta line
+- "- " prefix → bullet point
+- everything else → body paragraph
+
+Use exactly this structure:
+
+[Auto-synthesized — last updated <DATE PROVIDED IN USER MESSAGE>. Regenerated each pickup. Edit below the marker if you want changes preserved.]
+
+## Themes & convergences
+
+(bullets — what reviewers landed on independently, with attribution: "(3 of 5 reviewers)" or similar where it strengthens the point. Quote a tight phrase if one is striking.)
+
+## Concerns & open questions
+
+(bullets — risks named, conflicts between reviewers, things they wanted to know more about. Be honest about disagreement; don't smooth it over.)
+
+## Recommendation lean
+
+(short paragraph — where the team is leaning and how strong the consensus is. If it's split, say split. If it's unanimous, say so.)
+
+## Worth re-listening to
+
+(bullets — 2-4 quotes that punch above their weight, with reviewer-name attribution if reviewers identified themselves in their recording. Cite the source filename in parens.)
+
+If there's only one reflection so far, say so plainly in a single body paragraph and skip the four-section structure. Don't fabricate themes from a single voice.
+"""
+
+
+def synthesize_reflections(api_key: str, candidate_name: str,
+                           reflections: list[dict], generated_at: str) -> str:
+    """reflections: list of {filename, timestamp, transcript}. Returns
+    the synthesis as markdown-ish text matching SYNTHESIS_SYSTEM's spec."""
+    if not reflections:
+        return ""
+
+    blocks = []
+    for r in reflections:
+        ts = r.get("timestamp", "(unknown time)")
+        fn = r.get("filename", "(unknown file)")
+        blocks.append(f"### Reflection — {ts}\nSource: {fn}\n\n{r['transcript']}")
+    body = "\n\n---\n\n".join(blocks)
+
+    user = (
+        f"Candidate: {candidate_name}\n"
+        f"Synthesis date (use this in the meta line): {generated_at}\n"
+        f"Number of reflections to synthesize: {len(reflections)}\n\n"
+        f"--- REFLECTIONS BELOW ---\n\n{body}"
+    )
+    return call_claude(api_key, SYNTHESIS_MODEL, SYNTHESIS_SYSTEM, user,
+                       max_tokens=4096)
+
+
+def update_synthesis_in_doc(*, candidate_id: str, candidate_name: str,
+                            synthesis_md: str, generated_at: str) -> None:
+    """POST the new synthesis to Apps Script's /update_synthesis route."""
+    resp = requests.post(
+        APPS_SCRIPT_URL,
+        data={
+            "action": "update_synthesis",
+            "candidate_id": candidate_id,
+            "candidate_name": candidate_name,
+            "synthesis_md": synthesis_md,
+            "generated_at": generated_at,
+        },
+        timeout=60,
+    )
+    body = resp.text.strip()
+    if not resp.ok or not body.startswith("ok"):
+        raise RuntimeError(f"update_synthesis failed ({resp.status_code}): {body[:300]}")
+
+
 def append_transcript_to_doc(*, candidate_id: str, candidate_name: str,
                              transcript: str, source_filename: str,
                              timestamp: str) -> None:
@@ -288,20 +450,25 @@ def basename_no_ext(name: str) -> str:
     return re.sub(r"\.[^.]+$", "", name)
 
 
-def process_candidate_folder(service, candidate_folder: dict, dry_run: bool) -> dict:
+def process_candidate_folder(service, candidate_folder: dict,
+                             dry_run: bool, anthropic_key: str | None) -> dict:
     """Process every audio file in one candidate's recordings folder.
 
-    For each audio, we want both: (1) Whisper transcript saved as a .txt
-    sidecar in Drive, and (2) that transcript appended to the candidate's
-    Reviewer Reflections Google Doc. The first line of the .txt encodes
-    which steps have completed:
+    Per audio:
+      1. Whisper transcript (raw)
+      2. Claude Haiku cleanup (cleaned)
+      3. Append cleaned transcript to candidate's Reviewer Reflections Doc
+      4. Write a .txt sidecar in Drive whose first line is a state marker:
+         "# appended-to-doc: <ISO>" → fully done, skip future runs
+         "# pending-append"         → transcribed but append failed; retry
+                                       only the append (no re-transcription)
 
-      "# appended-to-doc: <ISO>"  → fully done, skip on subsequent runs
-      "# pending-append"          → transcribed but append failed; retry the
-                                    append only (no re-transcription)
-      no sidecar                  → fresh; transcribe + append from scratch
+    After all audio for this candidate is processed, if any new transcript
+    was appended, regenerate the synthesis section at the top of the Doc
+    by reading every .txt sidecar in Drive (the source of truth for cleaned
+    transcripts) and sending them to Claude Opus.
 
-    Returns {"name", "new", "appended", "skipped", "errors"}.
+    Returns {"name", "new", "appended", "synthesized", "skipped", "errors"}.
     """
     children = list_children(service, candidate_folder["id"])
     audio_files = [c for c in children if is_audio(c["name"])]
@@ -313,16 +480,18 @@ def process_candidate_folder(service, candidate_folder: dict, dry_run: bool) -> 
 
     new_count = 0
     appended_count = 0
+    synthesized = 0
     skipped = 0
     errors: list[str] = []
+    candidate_id_seen: str | None = None
 
     for audio in audio_files:
         base = basename_no_ext(audio["name"])
         candidate_id = slug_from_filename(audio["name"], candidate_folder["name"])
+        candidate_id_seen = candidate_id
         timestamp = audio.get("createdTime") or datetime_from_filename(audio["name"])
 
         existing_txt = txt_by_base.get(base)
-        # Three branches:
         if existing_txt and not dry_run:
             content = read_drive_text(service, existing_txt["id"])
             first_line = content.splitlines()[0] if content else ""
@@ -361,30 +530,39 @@ def process_candidate_folder(service, candidate_folder: dict, dry_run: bool) -> 
         local = TMP_DIR / candidate_folder["name"] / audio["name"]
         try:
             download_file(service, audio["id"], local)
-            transcript = transcribe_local_whisper(local)
-            if not transcript:
-                transcript = "(empty transcript — Whisper returned no text)"
-            print(f"      transcribed ({len(transcript)} chars)", flush=True)
+            raw_transcript = transcribe_local_whisper(local)
+            if not raw_transcript:
+                raw_transcript = "(empty transcript — Whisper returned no text)"
+            print(f"      transcribed ({len(raw_transcript)} chars)", flush=True)
 
-            # Try the append. On success, write .txt with appended marker.
-            # On failure, write .txt with pending marker so we don't
-            # re-transcribe next run, and surface the error.
+            # Cleanup pass — Haiku fixes punctuation, fillers, homophones
+            # without paraphrasing or summarizing.
+            if anthropic_key:
+                cleaned = cleanup_transcript(anthropic_key, raw_transcript)
+                if cleaned != raw_transcript:
+                    print(f"      cleaned    ({len(cleaned)} chars)", flush=True)
+            else:
+                cleaned = raw_transcript
+
+            # Append cleaned transcript to the doc. On failure, write
+            # pending-marker .txt so we retry the append next run without
+            # re-transcribing or re-cleaning.
             try:
                 append_transcript_to_doc(
                     candidate_id=candidate_id,
                     candidate_name=candidate_folder["name"],
-                    transcript=transcript,
+                    transcript=cleaned,
                     source_filename=audio["name"],
                     timestamp=timestamp,
                 )
                 upload_text(service, candidate_folder["id"], f"{base}.txt",
-                            mark_appended(transcript))
+                            mark_appended(cleaned))
                 new_count += 1
                 appended_count += 1
                 print("      appended to doc", flush=True)
             except Exception as e:
                 upload_text(service, candidate_folder["id"], f"{base}.txt",
-                            mark_pending(transcript))
+                            mark_pending(cleaned))
                 errors.append(f"{audio['name']}: append failed: {e}")
                 print(f"      transcribed but append FAILED: {e}", flush=True)
         except Exception as e:
@@ -396,13 +574,76 @@ def process_candidate_folder(service, candidate_folder: dict, dry_run: bool) -> 
             except Exception:
                 pass
 
+    # Synthesis pass — only run if we appended something new this round
+    # AND we have an Anthropic key. Reads every .txt sidecar (source of
+    # truth for cleaned transcripts) and asks Claude Opus to write a
+    # Jenny-voice synthesis. Sends the result to /update_synthesis which
+    # rewrites the synthesis section at the top of the Doc.
+    if appended_count > 0 and anthropic_key and candidate_id_seen and not dry_run:
+        try:
+            reflections = gather_reflections_for_synthesis(
+                service, candidate_folder, audio_files
+            )
+            generated_at = datetime.now(timezone.utc).isoformat()
+            print(f"      synthesizing {len(reflections)} reflection(s)…", flush=True)
+            synthesis_md = synthesize_reflections(
+                anthropic_key, candidate_folder["name"], reflections, generated_at
+            )
+            update_synthesis_in_doc(
+                candidate_id=candidate_id_seen,
+                candidate_name=candidate_folder["name"],
+                synthesis_md=synthesis_md,
+                generated_at=generated_at,
+            )
+            synthesized += 1
+            print(f"      synthesis updated", flush=True)
+        except Exception as e:
+            errors.append(f"synthesis: {e}")
+            print(f"      SYNTHESIS FAILED: {e}", flush=True)
+
     return {
         "name": candidate_folder["name"],
         "new": new_count,
         "appended": appended_count,
+        "synthesized": synthesized,
         "skipped": skipped,
         "errors": errors,
     }
+
+
+def gather_reflections_for_synthesis(service, candidate_folder: dict,
+                                     audio_files: list[dict]) -> list[dict]:
+    """Pull every .txt sidecar in the candidate's recordings folder, strip
+    the marker line off, and return [{filename, timestamp, transcript}, ...]
+    sorted by submission timestamp. Used as input to the synthesis LLM."""
+    children = list_children(service, candidate_folder["id"])
+    txt_by_base = {
+        basename_no_ext(c["name"]): c for c in children
+        if c["name"].lower().endswith(".txt")
+    }
+    audio_by_base = {basename_no_ext(a["name"]): a for a in audio_files}
+
+    reflections: list[dict] = []
+    for base, txt_meta in txt_by_base.items():
+        body = read_drive_text(service, txt_meta["id"])
+        lines = body.splitlines()
+        # Drop the marker line if present
+        if lines and (lines[0].startswith(APPEND_OK_PREFIX)
+                      or lines[0].startswith(APPEND_PENDING_MARKER)):
+            transcript = "\n".join(lines[1:]).strip()
+        else:
+            transcript = body.strip()
+        if not transcript:
+            continue
+        audio = audio_by_base.get(base)
+        ts = (audio or {}).get("createdTime") or datetime_from_filename(base + ".webm")
+        reflections.append({
+            "filename": base + ".webm",
+            "timestamp": ts,
+            "transcript": transcript,
+        })
+    reflections.sort(key=lambda r: r["timestamp"])
+    return reflections
 
 
 def mark_appended(transcript: str) -> str:
@@ -448,6 +689,15 @@ def main():
     print("Loading Drive service…", flush=True)
     svc = load_drive_service()
 
+    # Anthropic key — optional. If missing, the script still does Whisper +
+    # append, just skips cleanup and synthesis.
+    anthropic_key = load_anthropic_key()
+    if anthropic_key:
+        print("✓ Anthropic key loaded — cleanup + synthesis enabled.", flush=True)
+    else:
+        print("⚠ No Anthropic key found — skipping cleanup + synthesis. "
+              "Stash one at ~/.config/dwell/anthropic_key.", flush=True)
+
     print("Listing candidate folders…", flush=True)
     candidate_folders = [
         c for c in list_children(svc, REVIEWER_RECORDINGS_PARENT_ID)
@@ -462,22 +712,28 @@ def main():
     summaries = []
     for folder in sorted(candidate_folders, key=lambda c: c["name"]):
         print(f"\n{folder['name']}", flush=True)
-        summaries.append(process_candidate_folder(svc, folder, args.dry_run))
+        summaries.append(
+            process_candidate_folder(svc, folder, args.dry_run, anthropic_key)
+        )
 
     # Report
     print("\n" + "=" * 60)
-    total_new      = sum(s["new"] for s in summaries)
-    total_appended = sum(s.get("appended", 0) for s in summaries)
-    total_err      = sum(len(s["errors"]) for s in summaries)
+    total_new       = sum(s["new"] for s in summaries)
+    total_appended  = sum(s.get("appended", 0) for s in summaries)
+    total_synthd    = sum(s.get("synthesized", 0) for s in summaries)
+    total_err       = sum(len(s["errors"]) for s in summaries)
     print(f"  {total_new} new transcript{'' if total_new == 1 else 's'}, "
           f"{total_appended} doc append{'' if total_appended == 1 else 's'}, "
+          f"{total_synthd} synthesis update{'' if total_synthd == 1 else 's'}, "
           f"{total_err} error{'' if total_err == 1 else 's'}"
           f"{' (DRY RUN)' if args.dry_run else ''}")
     for s in summaries:
-        if s["new"] or s.get("appended") or s["errors"]:
+        if s["new"] or s.get("appended") or s.get("synthesized") or s["errors"]:
             line = f"  • {s['name']}: {s['new']} new"
             if s.get("appended"):
                 line += f", {s['appended']} appended"
+            if s.get("synthesized"):
+                line += f", synthesis updated"
             if s["errors"]:
                 line += f", {len(s['errors'])} err"
             print(line)

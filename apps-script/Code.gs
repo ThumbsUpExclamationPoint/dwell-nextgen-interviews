@@ -133,6 +133,9 @@ function doGet(e) {
 function doPost(e) {
   try {
     const p = (e && e.parameter) || {};
+    if (p.action === "update_synthesis") {
+      return handleUpdateSynthesis(p);
+    }
     if (p.action === "append_transcript" || p.transcript) {
       return handleAppendTranscript(p);
     }
@@ -260,6 +263,99 @@ function findOrCreateReflectionsDoc(materialsFolderId, candidateName) {
   ).setItalic(true);
   body.appendParagraph("");
   return doc;
+}
+
+/**
+ * Replace the synthesis section at the top of the candidate's Reviewer
+ * Reflections Doc. Preserves: (1) the doc title at index 0, (2) every
+ * "Reflection — ..." section below. Deletes anything between the title
+ * and the first reflection, then inserts the new synthesis content.
+ *
+ * Expected fields:
+ *   action          : "update_synthesis"
+ *   candidate_id    : slug, must be a key in CANDIDATE_MATERIAL_FOLDERS
+ *   candidate_name  : display name (used as Doc title prefix when creating)
+ *   synthesis_md    : the new synthesis content as a markdown-ish string
+ *                     (parsed below: "## " → Heading 2, "- " → bullet,
+ *                     "[...]" wrapper line → italic-grey meta line)
+ *   generated_at    : ISO timestamp of when this synthesis was generated
+ */
+function handleUpdateSynthesis(p) {
+  const candidateId   = p.candidate_id;
+  const candidateName = p.candidate_name || candidateId || "(unknown)";
+  const synthesisMd   = (p.synthesis_md || "").trim();
+  const generatedAt   = p.generated_at || new Date().toISOString();
+
+  if (!candidateId)  return textResponse("err: missing candidate_id");
+  if (!synthesisMd)  return textResponse("err: missing synthesis_md");
+
+  const materialsFolderId = CANDIDATE_MATERIAL_FOLDERS[candidateId];
+  if (!materialsFolderId) {
+    return textResponse("err: unknown candidate_id " + candidateId);
+  }
+
+  const doc = findOrCreateReflectionsDoc(materialsFolderId, candidateName);
+  const body = doc.getBody();
+
+  // Find the index of the first reflection — it's the boundary between
+  // synthesis (above) and reflections (below).
+  let firstReflectionIdx = -1;
+  const numChildren = body.getNumChildren();
+  for (let i = 0; i < numChildren; i++) {
+    const child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+    const para = child.asParagraph();
+    if (para.getHeading() === DocumentApp.ParagraphHeading.HEADING2 &&
+        para.getText().indexOf("Reflection —") === 0) {
+      firstReflectionIdx = i;
+      break;
+    }
+  }
+
+  // Delete everything between the title (idx 0) and the first reflection.
+  // If no reflections yet, delete everything after the title.
+  const deleteEnd = firstReflectionIdx >= 0
+    ? firstReflectionIdx - 1
+    : numChildren - 1;
+  for (let i = deleteEnd; i >= 1; i--) {
+    body.removeChild(body.getChild(i));
+  }
+
+  // Parse the markdown-ish synthesis into paragraph specs and insert
+  // them at idx 1, 2, 3, ... (each insert pushes existing content down).
+  const lines = synthesisMd.split(/\r?\n/);
+  let insertIdx = 1;
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    let para;
+    if (line === "") {
+      para = body.insertParagraph(insertIdx, "");
+    } else if (/^##\s+/.test(line)) {
+      para = body.insertParagraph(insertIdx, line.replace(/^##\s+/, ""));
+      para.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    } else if (/^\[.*\]$/.test(line)) {
+      // Meta line in brackets — italic, grey, smaller feel.
+      para = body.insertParagraph(insertIdx, line.replace(/^\[|\]$/g, ""));
+      para.editAsText().setItalic(true).setForegroundColor("#6b7280");
+    } else if (/^[-•]\s+/.test(line)) {
+      // Bullet
+      const text = line.replace(/^[-•]\s+/, "");
+      const item = body.insertListItem(insertIdx, text);
+      item.setGlyphType(DocumentApp.GlyphType.BULLET);
+      para = item;
+    } else {
+      para = body.insertParagraph(insertIdx, line);
+    }
+    insertIdx++;
+  }
+
+  // Spacer paragraph between synthesis and the first reflection,
+  // for visual separation.
+  body.insertParagraph(insertIdx, "");
+
+  console.log("synthesis updated for " + candidateId +
+              " (" + lines.length + " lines) → " + doc.getUrl());
+  return textResponse("ok: " + doc.getId());
 }
 
 function textResponse(msg) {
