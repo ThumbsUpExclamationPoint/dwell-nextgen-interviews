@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.dwell.whisper-server — keeps the local Whisper server running.
+
+  Launches at login and stays alive (auto-restart on crash). Listens on
+  127.0.0.1:12017 with the medium.en model. The Jenny pickup LaunchAgent
+  posts audio to this port.
+
+  This is a template — install.sh substitutes {{WHISPER_BIN}} and
+  {{HOME}} with absolute paths before copying to ~/Library/LaunchAgents/.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dwell.whisper-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{WHISPER_BIN}}</string>
+        <string>--model</string>
+        <string>{{HOME}}/.cache/whisper/ggml-medium.en.bin</string>
+        <string>--port</string>
+        <string>12017</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/dwell-whisper-server.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/dwell-whisper-server.err</string>
+</dict>
+</plist>

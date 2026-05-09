@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -53,6 +54,21 @@ DRIVE_TOKEN_PATH = Path.home() / ".config" / "dwell-drive-mcp" / "token.json"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 AUDIO_EXTS = (".webm", ".m4a", ".mp3", ".mpeg", ".wav", ".ogg")
 TMP_DIR = Path("/tmp/nextgen-reviewer")
+
+# Apps Script web app endpoint that handles audio uploads (from the page)
+# AND transcript appends (from this script). See apps-script/Code.gs.
+APPS_SCRIPT_URL = (
+    "https://script.google.com/macros/s/"
+    "AKfycbwR5S1t1Fm-R56bHShMraOn5BOEC5EgR4htd7fOuTT8UDdtQdJZ2_cqrfXRKISBS6pG/exec"
+)
+
+# First line of every .txt sidecar marks whether the transcript was
+# successfully appended to the candidate's Reviewer Reflections Doc.
+# Two possible states:
+#   "# pending-append"          → transcribe succeeded, append failed (retry next run)
+#   "# appended-to-doc: <ISO>"  → fully done
+APPEND_OK_PREFIX = "# appended-to-doc: "
+APPEND_PENDING_MARKER = "# pending-append"
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +102,7 @@ def list_children(service, folder_id: str, page_size: int = 200) -> list[dict]:
     while True:
         resp = service.files().list(
             q=f"'{folder_id}' in parents and trashed = false",
-            fields="nextPageToken, files(id, name, mimeType, size)",
+            fields="nextPageToken, files(id, name, mimeType, size, createdTime)",
             pageSize=page_size,
             pageToken=page_token,
         ).execute()
@@ -115,6 +131,32 @@ def upload_text(service, parent_id: str, name: str, text: str) -> dict:
     return service.files().create(body=body, media_body=media, fields="id, name").execute()
 
 
+def update_text_file(service, file_id: str, text: str) -> None:
+    """Replace a plain-text file's contents."""
+    media = MediaIoBaseUpload(io.BytesIO(text.encode("utf-8")), mimetype="text/plain")
+    service.files().update(fileId=file_id, media_body=media).execute()
+
+
+def find_txt_sidecar(children: list[dict], audio_basename: str) -> dict | None:
+    """Return the .txt sibling of an audio file (by basename), if any."""
+    target = audio_basename + ".txt"
+    for c in children:
+        if c["name"] == target:
+            return c
+    return None
+
+
+def read_drive_text(service, file_id: str) -> str:
+    """Read a plain-text Drive file's content."""
+    request = service.files().get_media(fileId=file_id)
+    buf = io.BytesIO()
+    downloader = MediaIoBaseDownload(buf, request, chunksize=1 << 20)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return buf.getvalue().decode("utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------------------
 # Whisper
 # ---------------------------------------------------------------------------
@@ -135,6 +177,37 @@ def transcribe_local_whisper(audio_path: Path) -> str:
     return text.strip()
 
 
+def append_transcript_to_doc(*, candidate_id: str, candidate_name: str,
+                             transcript: str, source_filename: str,
+                             timestamp: str) -> None:
+    """POST to the Apps Script /append route. Raises on non-ok response."""
+    resp = requests.post(
+        APPS_SCRIPT_URL,
+        data={
+            "action": "append_transcript",
+            "candidate_id": candidate_id,
+            "candidate_name": candidate_name,
+            "transcript": transcript,
+            "source_filename": source_filename,
+            "timestamp": timestamp,
+        },
+        timeout=60,
+        # Apps Script web apps do a 302 → script.googleusercontent.com.
+        # requests follows redirects by default, which is what we want.
+    )
+    body = resp.text.strip()
+    if not resp.ok or not body.startswith("ok"):
+        raise RuntimeError(f"append failed ({resp.status_code}): {body[:300]}")
+
+
+def slug_from_filename(name: str, fallback_folder_name: str) -> str:
+    """Filenames are formatted as `<timestamp>__<slug>.<ext>`. Pull the slug."""
+    base = re.sub(r"\.[^.]+$", "", name)
+    if "__" in base:
+        return base.rsplit("__", 1)[1]
+    return slugify(fallback_folder_name)
+
+
 # ---------------------------------------------------------------------------
 # Core workflow
 # ---------------------------------------------------------------------------
@@ -147,22 +220,67 @@ def basename_no_ext(name: str) -> str:
 
 
 def process_candidate_folder(service, candidate_folder: dict, dry_run: bool) -> dict:
-    """Transcribe every new audio file in one candidate's recordings folder.
+    """Process every audio file in one candidate's recordings folder.
 
-    Returns {"name": str, "new": int, "skipped": int, "errors": list[str]}.
+    For each audio, we want both: (1) Whisper transcript saved as a .txt
+    sidecar in Drive, and (2) that transcript appended to the candidate's
+    Reviewer Reflections Google Doc. The first line of the .txt encodes
+    which steps have completed:
+
+      "# appended-to-doc: <ISO>"  → fully done, skip on subsequent runs
+      "# pending-append"          → transcribed but append failed; retry the
+                                    append only (no re-transcription)
+      no sidecar                  → fresh; transcribe + append from scratch
+
+    Returns {"name", "new", "appended", "skipped", "errors"}.
     """
     children = list_children(service, candidate_folder["id"])
     audio_files = [c for c in children if is_audio(c["name"])]
-    txt_basenames = {basename_no_ext(c["name"]) for c in children
-                     if c["name"].lower().endswith(".txt")}
+    txt_by_base: dict[str, dict] = {}
+    for c in children:
+        n = c["name"]
+        if n.lower().endswith(".txt"):
+            txt_by_base[basename_no_ext(n)] = c
 
     new_count = 0
+    appended_count = 0
     skipped = 0
     errors: list[str] = []
 
     for audio in audio_files:
         base = basename_no_ext(audio["name"])
-        if base in txt_basenames:
+        candidate_id = slug_from_filename(audio["name"], candidate_folder["name"])
+        timestamp = audio.get("createdTime") or datetime_from_filename(audio["name"])
+
+        existing_txt = txt_by_base.get(base)
+        # Three branches:
+        if existing_txt and not dry_run:
+            content = read_drive_text(service, existing_txt["id"])
+            first_line = content.splitlines()[0] if content else ""
+            if first_line.startswith(APPEND_OK_PREFIX):
+                skipped += 1
+                continue
+            if first_line.startswith(APPEND_PENDING_MARKER):
+                # Transcript exists; only need to retry the append.
+                print(f"  → {audio['name']} (append-retry)", flush=True)
+                transcript = "\n".join(content.splitlines()[1:]).strip()
+                try:
+                    append_transcript_to_doc(
+                        candidate_id=candidate_id,
+                        candidate_name=candidate_folder["name"],
+                        transcript=transcript,
+                        source_filename=audio["name"],
+                        timestamp=timestamp,
+                    )
+                    update_text_file(service, existing_txt["id"],
+                                     mark_appended(transcript))
+                    appended_count += 1
+                    print("      appended on retry", flush=True)
+                except Exception as e:
+                    errors.append(f"{audio['name']}: {e}")
+                    print(f"      append-retry FAILED: {e}", flush=True)
+                continue
+            # Sidecar exists but lacks any marker — old format. Treat as done.
             skipped += 1
             continue
 
@@ -171,15 +289,35 @@ def process_candidate_folder(service, candidate_folder: dict, dry_run: bool) -> 
             new_count += 1
             continue
 
+        local = TMP_DIR / candidate_folder["name"] / audio["name"]
         try:
-            local = TMP_DIR / candidate_folder["name"] / audio["name"]
             download_file(service, audio["id"], local)
             transcript = transcribe_local_whisper(local)
             if not transcript:
                 transcript = "(empty transcript — Whisper returned no text)"
-            upload_text(service, candidate_folder["id"], f"{base}.txt", transcript)
-            new_count += 1
             print(f"      transcribed ({len(transcript)} chars)", flush=True)
+
+            # Try the append. On success, write .txt with appended marker.
+            # On failure, write .txt with pending marker so we don't
+            # re-transcribe next run, and surface the error.
+            try:
+                append_transcript_to_doc(
+                    candidate_id=candidate_id,
+                    candidate_name=candidate_folder["name"],
+                    transcript=transcript,
+                    source_filename=audio["name"],
+                    timestamp=timestamp,
+                )
+                upload_text(service, candidate_folder["id"], f"{base}.txt",
+                            mark_appended(transcript))
+                new_count += 1
+                appended_count += 1
+                print("      appended to doc", flush=True)
+            except Exception as e:
+                upload_text(service, candidate_folder["id"], f"{base}.txt",
+                            mark_pending(transcript))
+                errors.append(f"{audio['name']}: append failed: {e}")
+                print(f"      transcribed but append FAILED: {e}", flush=True)
         except Exception as e:
             errors.append(f"{audio['name']}: {e}")
             print(f"      FAILED: {e}", flush=True)
@@ -192,9 +330,31 @@ def process_candidate_folder(service, candidate_folder: dict, dry_run: bool) -> 
     return {
         "name": candidate_folder["name"],
         "new": new_count,
+        "appended": appended_count,
         "skipped": skipped,
         "errors": errors,
     }
+
+
+def mark_appended(transcript: str) -> str:
+    return f"{APPEND_OK_PREFIX}{datetime.now(timezone.utc).isoformat()}\n{transcript}"
+
+
+def mark_pending(transcript: str) -> str:
+    return f"{APPEND_PENDING_MARKER}\n{transcript}"
+
+
+def datetime_from_filename(name: str) -> str:
+    """Audio filenames look like '2026-05-08T19-30-12-345Z__slug.webm'.
+    Convert the timestamp portion back to a real ISO 8601 string. Falls
+    back to current time if it can't parse."""
+    m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)__", name)
+    if not m:
+        return datetime.now(timezone.utc).isoformat()
+    raw = m.group(1)
+    # Restore : in time portion and . before milliseconds.
+    iso = re.sub(r"T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z", r"T\1:\2:\3.\4Z", raw)
+    return iso
 
 
 def main():
@@ -235,15 +395,21 @@ def main():
 
     # Report
     print("\n" + "=" * 60)
-    total_new = sum(s["new"] for s in summaries)
-    total_err = sum(len(s["errors"]) for s in summaries)
+    total_new      = sum(s["new"] for s in summaries)
+    total_appended = sum(s.get("appended", 0) for s in summaries)
+    total_err      = sum(len(s["errors"]) for s in summaries)
     print(f"  {total_new} new transcript{'' if total_new == 1 else 's'}, "
+          f"{total_appended} doc append{'' if total_appended == 1 else 's'}, "
           f"{total_err} error{'' if total_err == 1 else 's'}"
           f"{' (DRY RUN)' if args.dry_run else ''}")
     for s in summaries:
-        if s["new"] or s["errors"]:
-            print(f"  • {s['name']}: {s['new']} new"
-                  + (f", {len(s['errors'])} err" if s["errors"] else ""))
+        if s["new"] or s.get("appended") or s["errors"]:
+            line = f"  • {s['name']}: {s['new']} new"
+            if s.get("appended"):
+                line += f", {s['appended']} appended"
+            if s["errors"]:
+                line += f", {len(s['errors'])} err"
+            print(line)
             for err in s["errors"]:
                 print(f"      ✗ {err}")
     print("=" * 60)

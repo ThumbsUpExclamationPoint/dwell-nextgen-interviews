@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.dwell.nextgen-pickup — runs process_recordings.py every 15 minutes.
+
+  Lists new audio in Reviewer Recordings/<candidate>/ folders, transcribes
+  each via local Whisper (port 12017), POSTs the transcript to the Apps
+  Script /append endpoint which appends to the candidate's Reviewer
+  Reflections Google Doc, and writes a .txt sidecar in Drive as the
+  idempotency marker.
+
+  StartInterval=900 means "run 900 seconds after the previous run starts"
+  — so a typical day produces ~96 runs, but only when the Mac is awake.
+  Each run takes a few seconds when there's nothing new.
+
+  This is a template — install.sh substitutes {{PROJECT_DIR}} with the
+  absolute path before copying to ~/Library/LaunchAgents/.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dwell.nextgen-pickup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PROJECT_DIR}}/.venv/bin/python3</string>
+        <string>{{PROJECT_DIR}}/jenny-skill/scripts/process_recordings.py</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/dwell-nextgen-pickup.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/dwell-nextgen-pickup.err</string>
+</dict>
+</plist>

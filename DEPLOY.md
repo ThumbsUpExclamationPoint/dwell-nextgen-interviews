@@ -125,6 +125,64 @@ A `.txt` should appear next to your test `.webm`.
 
 ---
 
+## Step 6 — Automate Jenny's pickup (one-time, ~3 min)
+
+Once the upload pipeline is working end-to-end, install the two
+LaunchAgents that make Jenny's transcription step automatic:
+
+```bash
+cd ~/Documents/Claude/Projects/Building\ Next\ Gen\ Hub/launch-agents
+./install.sh
+```
+
+This does five things:
+1. Confirms `whisper-server` and the medium.en model are installed.
+2. Creates a Python venv (`.venv/`) and pip-installs the script's deps.
+3. Renders the two plist templates with absolute paths.
+4. Loads them with `launchctl`.
+5. Probes `127.0.0.1:12017` to confirm Whisper is up.
+
+**`com.dwell.whisper-server`** keeps the local Whisper server running
+(auto-restarts on crash, runs at login).
+
+**`com.dwell.nextgen-pickup`** runs `process_recordings.py` every 15
+minutes while your Mac is awake. Each run:
+- Lists new audio in every `Reviewer Recordings/<candidate>/` folder
+- Transcribes via local Whisper
+- Calls the Apps Script `/append` route, which appends the transcript
+  to that candidate's "Reviewer Reflections" Google Doc (auto-created
+  in the candidate's materials folder if missing)
+- Writes a `.txt` sidecar in Drive as the dedupe marker
+
+If the Apps Script call fails, the `.txt` sidecar is written with a
+`# pending-append` marker so the script will retry the append on the
+next run *without* re-transcribing the audio.
+
+Manually trigger an out-of-band run:
+```bash
+launchctl start com.dwell.nextgen-pickup
+```
+
+Watch logs:
+```bash
+tail -f /tmp/dwell-nextgen-pickup.log
+tail -f /tmp/dwell-whisper-server.log
+```
+
+Disable both later:
+```bash
+~/Documents/Claude/Projects/Building\ Next\ Gen\ Hub/launch-agents/install.sh --uninstall
+```
+
+> **Heads-up — redeploy the Apps Script.** The /append route is new
+> code. Apps Script web apps don't auto-update when the source file
+> changes; you have to publish a new version. Open your Apps Script
+> project → **Deploy → Manage deployments** → ✏️ **Edit** on the
+> existing deployment → **Version**: `New version` → **Deploy**. Same
+> URL, updated code. (If you skip this, the page upload still works
+> but transcript appends will return `err: missing audio_b64` because
+> the deployed code is from before the /append route existed.)
+
 ## Maintenance
 
 - **New candidate**: add an entry to `CANDIDATES` in `index.html` AND
