@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Dwell Next Gen Director — Reviewer Reflections</title>
+  <!-- Permanent Marker is a free Google font that closely matches the      -->
+  <!-- brushy, hand-painted "NEXT GEN" treatment in Dwell's brand asset.    -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&display=swap" rel="stylesheet">
   <style>
     /* -------- Reset & base -------- */
     *, *::before, *::after { box-sizing: border-box; }
@@ -12,17 +17,65 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       color: #1f2937;
-      background: #f8f7f4;
+      background: #ffffff;       /* Dwell brand: clean white */
       line-height: 1.55;
       -webkit-font-smoothing: antialiased;
     }
-    a { color: #2563eb; text-decoration: none; }
+    a { color: #00cccc; text-decoration: none; }
     a:hover { text-decoration: underline; }
+
+    /* -------- Brand color -------- */
+    /* Used for accents: drive links, submit button, gate enter button,    */
+    /* and the "NEXT GEN" tag in the header. #00cccc = Dwell brand teal.   */
 
     /* -------- Layout -------- */
     .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
-    header h1 { font-size: 28px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
-    header .subtitle { color: #6b7280; margin: 0 0 24px; font-size: 16px; }
+
+    /* -------- Brand header (icon + wordmark + NEXT GEN tag) -------- */
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 4px;
+      margin: 8px 0 28px;
+    }
+    .brand-icon {
+      width: 96px;
+      height: 96px;
+      object-fit: contain;
+      display: block;
+    }
+    .brand-wordmark {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 38px;
+      font-weight: 300;
+      letter-spacing: 0.18em;
+      color: #111827;
+      margin-top: 4px;
+      padding-left: 0.18em; /* offset to balance trailing letter-spacing */
+    }
+    .brand-tag {
+      font-family: "Permanent Marker", "Marker Felt", cursive;
+      font-size: 22px;
+      color: #00cccc;
+      letter-spacing: 0.04em;
+      margin-top: -2px;
+    }
+    header h1 {
+      font-size: 24px;
+      font-weight: 500;
+      margin: 0 0 6px;
+      letter-spacing: -0.01em;
+      text-align: center;
+      color: #1f2937;
+    }
+    header .subtitle {
+      color: #6b7280;
+      margin: 0 0 24px;
+      font-size: 15px;
+      text-align: center;
+    }
 
     .intro {
       background: #fff;
@@ -54,8 +107,9 @@
     .candidate-name { font-size: 19px; font-weight: 600; margin: 0; color: #111827; }
     .drive-link {
       font-size: 14px;
-      color: #2563eb;
+      color: #00cccc;
       white-space: nowrap;
+      font-weight: 500;
     }
     .drive-link::before {
       content: "📁 ";
@@ -97,11 +151,12 @@
       animation: pulse 1.6s ease-in-out infinite;
     }
     .btn-submit {
-      background: #16a34a;
+      background: #00cccc;
       color: #fff;
-      border-color: #16a34a;
+      border-color: #00cccc;
+      font-weight: 500;
     }
-    .btn-submit:hover:not(:disabled) { background: #15803d; border-color: #15803d; }
+    .btn-submit:hover:not(:disabled) { background: #00b3b3; border-color: #00b3b3; }
 
     @keyframes pulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5); }
@@ -134,7 +189,7 @@
     .gate {
       position: fixed;
       inset: 0;
-      background: #f8f7f4;
+      background: #ffffff;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -168,12 +223,12 @@
     .gate-card button {
       width: 100%;
       padding: 10px;
-      background: #1f2937;
+      background: #00cccc;
       color: #fff;
-      border-color: #1f2937;
+      border-color: #00cccc;
       font-weight: 500;
     }
-    .gate-card button:hover { background: #111827; border-color: #111827; }
+    .gate-card button:hover { background: #00b3b3; border-color: #00b3b3; }
     .gate-card .err { color: #b91c1c; font-size: 13px; margin-top: 4px; min-height: 16px; }
 
     /* -------- Footer -------- */
@@ -194,6 +249,10 @@
   <!-- if no session token present. -->
   <div class="gate" id="gate" hidden>
     <div class="gate-card">
+      <div class="brand" style="margin: 0 0 18px;">
+        <img class="brand-icon" src="assets/dwell-icon.png" alt="Dwell Church" style="width: 64px; height: 64px;">
+        <div class="brand-tag" style="font-size: 16px; margin-top: 2px;">NEXT GEN</div>
+      </div>
       <h2>Reviewer access</h2>
       <p>Enter the password Matt or Jenny shared with you.</p>
       <input type="password" id="gate-input" autocomplete="off" placeholder="Password" autofocus>
@@ -204,7 +263,12 @@
 
   <main class="wrap" id="main" hidden>
     <header>
-      <h1>Next Gen Director — Reviewer Reflections</h1>
+      <div class="brand">
+        <img class="brand-icon" src="assets/dwell-icon.png" alt="Dwell Church">
+        <div class="brand-wordmark">dwell</div>
+        <div class="brand-tag">NEXT GEN</div>
+      </div>
+      <h1>Director — Reviewer Reflections</h1>
       <p class="subtitle">Dwell Church of the Peninsula</p>
     </header>
 
