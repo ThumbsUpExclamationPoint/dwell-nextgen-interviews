@@ -30,6 +30,8 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -167,20 +169,30 @@ def read_drive_text(service, file_id: str) -> str:
 def transcribe_local_whisper(audio_path: Path) -> str:
     """POST to the local Whisper server, return transcript text.
 
-    Uses whisper.cpp's /inference endpoint:
-        - multipart file under 'file'
-        - response_format=json returns {"text": "..."}
+    whisper.cpp's /inference can't decode webm/Opus directly — it expects
+    PCM WAV. So we convert via ffmpeg first (16kHz mono, whisper.cpp's
+    native sample rate), then send the WAV.
     """
-    with audio_path.open("rb") as f:
-        resp = requests.post(
-            WHISPER_URL,
-            files={"file": (audio_path.name, f, "audio/webm")},
-            data={
-                "response_format": "json",
-                "temperature": "0",
-            },
-            timeout=600,  # transcription can take a while for long recordings
-        )
+    wav_path = ensure_wav(audio_path)
+    cleanup_wav = (wav_path != audio_path)
+    try:
+        with wav_path.open("rb") as f:
+            resp = requests.post(
+                WHISPER_URL,
+                files={"file": (wav_path.name, f, "audio/wav")},
+                data={
+                    "response_format": "json",
+                    "temperature": "0",
+                },
+                timeout=600,
+            )
+    finally:
+        if cleanup_wav:
+            try:
+                wav_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     if not resp.ok:
         raise RuntimeError(f"Whisper {resp.status_code}: {resp.text[:300]}")
     payload = resp.json()
@@ -189,6 +201,30 @@ def transcribe_local_whisper(audio_path: Path) -> str:
     if isinstance(payload, dict):
         return (payload.get("text") or "").strip()
     return str(payload).strip()
+
+
+def ensure_wav(audio_path: Path) -> Path:
+    """Return a path to a 16kHz mono WAV version of the audio. If the
+    source is already a WAV, returns the source unchanged. Otherwise
+    runs ffmpeg to convert to a sibling .wav file."""
+    if audio_path.suffix.lower() == ".wav":
+        return audio_path
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found on PATH — install with: brew install ffmpeg")
+    wav_path = audio_path.with_suffix(".wav")
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", str(audio_path),
+            "-ar", "16000",  # 16kHz
+            "-ac", "1",      # mono
+            "-c:a", "pcm_s16le",
+            "-loglevel", "error",
+            str(wav_path),
+        ],
+        check=True,
+    )
+    return wav_path
 
 
 def append_transcript_to_doc(*, candidate_id: str, candidate_name: str,
