@@ -73,6 +73,31 @@ const AUDIT_SHEET_ID = "";
 // -----------------------------------------------------------------------
 
 /**
+ * Run this function manually (▶ Run button) once after pasting in this
+ * version of the code. It exists so Apps Script's permission scanner
+ * sees every API we touch (Drive AND DocumentApp) and includes both
+ * scopes in the authorization prompt. Without this, the /append route
+ * fails at runtime with "You do not have permission to call
+ * DocumentApp.create" because the deployed scopes were captured before
+ * DocumentApp was added.
+ *
+ * Steps:
+ *   1. Function dropdown (top toolbar) → select "authorize"
+ *   2. Click ▶ Run
+ *   3. Approve the auth dialog (it will ask for Drive + Documents)
+ *   4. Then redeploy: Deploy → Manage deployments → ✏️ Edit →
+ *      Version: New version → Deploy
+ */
+function authorize() {
+  // Touch every API the doPost routes need so the auth scanner
+  // catches them all at once.
+  DriveApp.getRootFolder();
+  const tempDoc = DocumentApp.create("__nextgen-authorize-test__");
+  DriveApp.getFileById(tempDoc.getId()).setTrashed(true);
+  console.log("Authorization complete. Now redeploy as a new version.");
+}
+
+/**
  * GET — simple health check so Matt can sanity-check the deploy URL by
  * pasting it in a browser. Returns plain text.
  */

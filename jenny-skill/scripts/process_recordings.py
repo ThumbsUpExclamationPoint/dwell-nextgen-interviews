@@ -209,12 +209,13 @@ def ensure_wav(audio_path: Path) -> Path:
     runs ffmpeg to convert to a sibling .wav file."""
     if audio_path.suffix.lower() == ".wav":
         return audio_path
-    if not shutil.which("ffmpeg"):
-        raise RuntimeError("ffmpeg not found on PATH — install with: brew install ffmpeg")
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found — install with: brew install ffmpeg")
     wav_path = audio_path.with_suffix(".wav")
     subprocess.run(
         [
-            "ffmpeg", "-y",
+            ffmpeg, "-y",
             "-i", str(audio_path),
             "-ar", "16000",  # 16kHz
             "-ac", "1",      # mono
@@ -225,6 +226,24 @@ def ensure_wav(audio_path: Path) -> Path:
         check=True,
     )
     return wav_path
+
+
+def find_ffmpeg() -> str | None:
+    """Locate the ffmpeg binary, tolerating LaunchAgent's stripped PATH.
+
+    LaunchAgents on macOS run with a minimal PATH (/usr/bin:/bin:...),
+    which doesn't include Homebrew's bin dir. shutil.which() returns
+    None in that context even when ffmpeg is installed. Fall back to
+    the two standard Homebrew locations so this works under both the
+    user's interactive shell and the LaunchAgent.
+    """
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if Path(candidate).exists():
+            return candidate
+    return None
 
 
 def append_transcript_to_doc(*, candidate_id: str, candidate_name: str,
