@@ -366,11 +366,13 @@ def main():
     args = ap.parse_args()
 
     # Pre-flight: Whisper alive?
+    # We don't care which endpoint responds — any HTTP response (even 404)
+    # proves the server is running. whisper.cpp's built-in server doesn't
+    # expose /v1/models but DOES expose /v1/audio/transcriptions, which is
+    # the only endpoint we actually use. So we treat "any response" as up.
     if not args.dry_run:
         try:
-            r = requests.get("http://127.0.0.1:12017/v1/models", timeout=2)
-            if not r.ok:
-                die(f"Whisper server returned {r.status_code}. Start it before running.")
+            requests.get("http://127.0.0.1:12017/", timeout=2)
         except requests.RequestException as e:
             die(f"Can't reach Whisper at 127.0.0.1:12017 — start whisper-server first. ({e})")
 
