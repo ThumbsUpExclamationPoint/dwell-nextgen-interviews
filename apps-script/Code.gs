@@ -34,6 +34,9 @@ const CANDIDATE_FOLDERS = {
   "peter-gabra":        "1TCfsKBcGJdWBJmtp45I7wgorgIu7e1pW",
   "saleem-bhayani":     "1yJvGobbqALSfJ_7p3zlUTKjvgwsXNcfs",
   "tiffany-dowdy":      "12u_TkGJMMJ-JVCN9RjyfY8bn1Qxi3AhH",
+  // End-to-end test target. Remove once the search team starts using the
+  // page (also remove from CANDIDATES in index.html).
+  "test-candidate":     "1g9WzXj1gOFlciAls4djlS9xmf5YKDcsG",
 };
 
 // Optional: also write a row to a Drive sheet for an audit trail. Set this
