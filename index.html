@@ -141,6 +141,11 @@
       z-index: 10;
       padding: 20px;
     }
+    /* Author CSS above sets display: flex, which beats the user-agent  */
+    /* [hidden] { display: none } rule. Without this explicit override, */
+    /* setting gate.hidden = true after a correct password leaves the   */
+    /* gate visible. Same fix below for .gate-card and #main.           */
+    .gate[hidden], #main[hidden] { display: none !important; }
     .gate-card {
       background: #fff;
       border: 1px solid #e5e7eb;
