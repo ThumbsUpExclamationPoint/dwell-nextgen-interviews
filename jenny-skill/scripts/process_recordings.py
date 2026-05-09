@@ -48,8 +48,11 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 # ---------------------------------------------------------------------------
 
 REVIEWER_RECORDINGS_PARENT_ID = "1AznoGEFFBOVc0sOu1wjqWmT0-GDU4-Tb"
-WHISPER_URL = "http://127.0.0.1:12017/v1/audio/transcriptions"
-WHISPER_MODEL = "whisper-1"  # whisper-server ignores this, OpenAI-compat needs it
+# whisper.cpp's server (brew install whisper-cpp) exposes /inference. The
+# pfrankov/whisper-server fork exposes /v1/audio/transcriptions. Matt is
+# running the brew flavor, so we point at /inference here. Keep both URLs
+# documented so future-us knows the trade-off.
+WHISPER_URL = "http://127.0.0.1:12017/inference"
 DRIVE_TOKEN_PATH = Path.home() / ".config" / "dwell-drive-mcp" / "token.json"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 AUDIO_EXTS = (".webm", ".m4a", ".mp3", ".mpeg", ".wav", ".ogg")
@@ -162,19 +165,30 @@ def read_drive_text(service, file_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 def transcribe_local_whisper(audio_path: Path) -> str:
-    """POST to the local Whisper server, return transcript text."""
+    """POST to the local Whisper server, return transcript text.
+
+    Uses whisper.cpp's /inference endpoint:
+        - multipart file under 'file'
+        - response_format=json returns {"text": "..."}
+    """
     with audio_path.open("rb") as f:
         resp = requests.post(
             WHISPER_URL,
             files={"file": (audio_path.name, f, "audio/webm")},
-            data={"model": WHISPER_MODEL, "response_format": "json"},
+            data={
+                "response_format": "json",
+                "temperature": "0",
+            },
             timeout=600,  # transcription can take a while for long recordings
         )
     if not resp.ok:
         raise RuntimeError(f"Whisper {resp.status_code}: {resp.text[:300]}")
     payload = resp.json()
-    text = payload.get("text", "")
-    return text.strip()
+    # /inference returns {"text": "..."} but older builds return just a
+    # string in the body. Handle both shapes.
+    if isinstance(payload, dict):
+        return (payload.get("text") or "").strip()
+    return str(payload).strip()
 
 
 def append_transcript_to_doc(*, candidate_id: str, candidate_name: str,
