@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Dwell Next Gen Director — Reviewer Reflections</title>
+  <style>
+    /* -------- Reset & base -------- */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: #1f2937;
+      background: #f8f7f4;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* -------- Layout -------- */
+    .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
+    header h1 { font-size: 28px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+    header .subtitle { color: #6b7280; margin: 0 0 24px; font-size: 16px; }
+
+    .intro {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-bottom: 32px;
+    }
+    .intro p { margin: 0 0 8px; font-size: 15px; }
+    .intro p:last-child { margin-bottom: 0; }
+    .intro strong { color: #111827; }
+
+    /* -------- Candidate cards -------- */
+    .candidate {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 20px 22px;
+      margin-bottom: 16px;
+    }
+    .candidate-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 16px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .candidate-name { font-size: 19px; font-weight: 600; margin: 0; color: #111827; }
+    .drive-link {
+      font-size: 14px;
+      color: #2563eb;
+      white-space: nowrap;
+    }
+    .drive-link::before {
+      content: "📁 ";
+      filter: grayscale(0.2);
+    }
+
+    /* -------- Recorder controls -------- */
+    .recorder { display: flex; flex-direction: column; gap: 10px; }
+    .recorder-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button {
+      font-family: inherit;
+      font-size: 14px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #374151;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    button:hover:not(:disabled) { background: #f3f4f6; border-color: #9ca3af; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-record {
+      background: #dc2626;
+      color: #fff;
+      border-color: #dc2626;
+    }
+    .btn-record:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+    .btn-record.recording {
+      background: #fff;
+      color: #dc2626;
+      border-color: #dc2626;
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+    .btn-submit {
+      background: #16a34a;
+      color: #fff;
+      border-color: #16a34a;
+    }
+    .btn-submit:hover:not(:disabled) { background: #15803d; border-color: #15803d; }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5); }
+      50%      { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+    }
+
+    .timer {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 14px;
+      color: #6b7280;
+      min-width: 50px;
+    }
+    .timer.recording { color: #dc2626; font-weight: 600; }
+
+    audio {
+      width: 100%;
+      max-width: 380px;
+      height: 36px;
+    }
+
+    .status {
+      font-size: 13px;
+      min-height: 18px;
+    }
+    .status.success { color: #15803d; }
+    .status.error { color: #b91c1c; }
+    .status.info { color: #6b7280; }
+
+    /* -------- Password gate -------- */
+    .gate {
+      position: fixed;
+      inset: 0;
+      background: #f8f7f4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      padding: 20px;
+    }
+    .gate-card {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 28px 26px;
+      max-width: 380px;
+      width: 100%;
+    }
+    .gate-card h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+    .gate-card p { margin: 0 0 16px; color: #6b7280; font-size: 14px; }
+    .gate-card input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      font-size: 15px;
+      font-family: inherit;
+      margin-bottom: 12px;
+    }
+    .gate-card button {
+      width: 100%;
+      padding: 10px;
+      background: #1f2937;
+      color: #fff;
+      border-color: #1f2937;
+      font-weight: 500;
+    }
+    .gate-card button:hover { background: #111827; border-color: #111827; }
+    .gate-card .err { color: #b91c1c; font-size: 13px; margin-top: 4px; min-height: 16px; }
+
+    /* -------- Footer -------- */
+    footer {
+      text-align: center;
+      color: #9ca3af;
+      font-size: 13px;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid #e5e7eb;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Soft password gate. Not real security — just keeps the URL from being -->
+  <!-- usable if it gets shared casually. Hidden by default; shown on load   -->
+  <!-- if no session token present. -->
+  <div class="gate" id="gate" hidden>
+    <div class="gate-card">
+      <h2>Reviewer access</h2>
+      <p>Enter the password Matt or Jenny shared with you.</p>
+      <input type="password" id="gate-input" autocomplete="off" placeholder="Password" autofocus>
+      <button id="gate-submit" type="button">Enter</button>
+      <div class="err" id="gate-err" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <main class="wrap" id="main" hidden>
+    <header>
+      <h1>Next Gen Director — Reviewer Reflections</h1>
+      <p class="subtitle">Dwell Church of the Peninsula</p>
+    </header>
+
+    <div class="intro">
+      <p><strong>Thanks for taking time to share your read on each candidate.</strong>
+      Pick a candidate, hit record, and speak naturally — like you're debriefing
+      Matt over coffee. Submissions stay open through the whole process; you can
+      come back as many times as you want.</p>
+      <p><strong>Before you start each recording, please say:</strong> (1) your name,
+      (2) which candidate you interviewed, (3) when the interview happened, and
+      (4) who else was in the room.</p>
+    </div>
+
+    <div id="candidates"></div>
+
+    <footer>
+      Recordings are private to the search team. Audio is auto-transcribed and
+      organized into each candidate's notes by Jenny.
+    </footer>
+  </main>
+
+<script>
+/* =====================================================================
+ * CONFIG — edit these three values after deploying the Apps Script.
+ * ===================================================================== */
+const CONFIG = {
+  // The Apps Script web app URL. Filled in by Matt after he deploys
+  // (DEPLOY.md walks through the steps). Until this is set, submissions
+  // will fail with a clear error message.
+  APPS_SCRIPT_URL: "REPLACE_ME_WITH_APPS_SCRIPT_URL",
+
+  // Soft password gate. Anyone with this can submit. Change in one place.
+  PASSWORD: "dwell-nextgen-2026",
+
+  // Cap on a single recording (minutes). 15 is generous for reflective
+  // reviewer notes; auto-stop fires at the limit so people don't run forever.
+  MAX_MINUTES: 15,
+};
+
+/* Candidate registry. Each entry has:
+ *   id        — slug used as the candidate identifier in uploads
+ *   name      — display name
+ *   driveUrl  — link to the candidate's materials folder (resume, etc.)
+ *
+ * Order = alphabetical by first name (matches Drive folder order).
+ */
+const CANDIDATES = [
+  { id: "chris-miller",      name: "Chris Miller",          driveUrl: "https://drive.google.com/drive/folders/1qcCOhY-IbQFbDNSwPBcvxUtQT0Pugl1c" },
+  { id: "daniel-kim",        name: "Daniel Kim",            driveUrl: "https://drive.google.com/drive/folders/133Az_SPquxfHNailx61kXiwUt1FQ81Vg" },
+  { id: "donoven-rice",      name: "Donoven Rice",          driveUrl: "https://drive.google.com/drive/folders/1EZ7rDRx_tYiihvqHWAAk59g6el0gaMhS" },
+  { id: "jared-gallardo",    name: "Jared Gallardo",        driveUrl: "https://drive.google.com/drive/folders/14MRwRuRqClNlE1aV4PRPAwKF1uGhPHjR" },
+  { id: "jonas-bond",        name: "Jonas Bond",            driveUrl: "https://drive.google.com/drive/folders/1c2qkuS143ykufqQBVYvoRZ8N2H1suDMQ" },
+  { id: "kenneth-kenny-cook",name: "Kenneth “Kenny” Cook", driveUrl: "https://drive.google.com/drive/folders/1SoiV34en6PC_ht5j08DivfbIUok7uRXc" },
+  { id: "kyal-mcmillan",     name: "Kyal McMillan",         driveUrl: "https://drive.google.com/drive/folders/1UCgcviiAVZ_vUPSn83lE1Xpk5earOkN1" },
+  { id: "nicholas-feyma",    name: "Nicholas Feyma",        driveUrl: "https://drive.google.com/drive/folders/1dNsMU4fsHkozussACndY7pUcT82Q8qT6" },
+  { id: "peter-gabra",       name: "Peter Gabra",           driveUrl: "https://drive.google.com/drive/folders/1cxgyukRwgfilZ3wWnCNsqAO69L5vuYKs" },
+  { id: "saleem-bhayani",    name: "Saleem Bhayani",        driveUrl: "https://drive.google.com/drive/folders/15INlnkokPzteJHt2Ei_VrluKYsf5kUzQ" },
+  { id: "tiffany-dowdy",     name: "Tiffany Dowdy",         driveUrl: "https://drive.google.com/drive/folders/1Fxf8fv1DM5lWSsFJSsBwj43xjkCkTycK" },
+];
+
+/* =====================================================================
+ * Password gate
+ * ===================================================================== */
+(function gateInit(){
+  const gate    = document.getElementById('gate');
+  const main    = document.getElementById('main');
+  const input   = document.getElementById('gate-input');
+  const submit  = document.getElementById('gate-submit');
+  const err     = document.getElementById('gate-err');
+
+  // Already authed this session? Skip the gate.
+  if (sessionStorage.getItem('nextgen_unlocked') === '1') {
+    main.hidden = false;
+    return;
+  }
+  gate.hidden = false;
+
+  function tryUnlock() {
+    if (input.value === CONFIG.PASSWORD) {
+      sessionStorage.setItem('nextgen_unlocked', '1');
+      gate.hidden = true;
+      main.hidden = false;
+    } else {
+      err.textContent = "That doesn't match. Try again.";
+      input.value = '';
+      input.focus();
+    }
+  }
+  submit.addEventListener('click', tryUnlock);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') tryUnlock(); });
+})();
+
+/* =====================================================================
+ * Render one candidate card
+ * ===================================================================== */
+function renderCandidate(c) {
+  const card = document.createElement('section');
+  card.className = 'candidate';
+  card.dataset.id = c.id;
+
+  card.innerHTML = `
+    <div class="candidate-header">
+      <h2 class="candidate-name">${escapeHtml(c.name)}</h2>
+      <a class="drive-link" href="${c.driveUrl}" target="_blank" rel="noopener">
+        Candidate materials
+      </a>
+    </div>
+    <div class="recorder">
+      <div class="recorder-row">
+        <button type="button" class="btn-record" data-action="record">Start recording</button>
+        <span class="timer">0:00</span>
+        <audio controls hidden></audio>
+      </div>
+      <div class="recorder-row">
+        <button type="button" class="btn-submit" data-action="submit" disabled>Submit recording</button>
+        <button type="button" data-action="discard" disabled>Discard &amp; re-record</button>
+      </div>
+      <div class="status info" aria-live="polite"></div>
+    </div>
+  `;
+
+  attachRecorder(card, c);
+  return card;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, ch => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+
+/* =====================================================================
+ * Recorder — one independent state machine per card
+ * ===================================================================== */
+function attachRecorder(card, candidate) {
+  const recordBtn  = card.querySelector('[data-action="record"]');
+  const submitBtn  = card.querySelector('[data-action="submit"]');
+  const discardBtn = card.querySelector('[data-action="discard"]');
+  const audioEl    = card.querySelector('audio');
+  const timerEl    = card.querySelector('.timer');
+  const statusEl   = card.querySelector('.status');
+
+  let mediaRecorder = null;   // active MediaRecorder instance, or null
+  let chunks = [];            // raw audio chunks captured by MediaRecorder
+  let blob = null;            // assembled Blob ready to submit
+  let stream = null;          // mic MediaStream
+  let timerInterval = null;
+  let startTime = 0;
+  let maxTimeout = null;
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text;
+    statusEl.className = 'status ' + (kind || 'info');
+  }
+
+  function pickMimeType() {
+    // MediaRecorder support varies. Prefer Opus/WebM (Chrome, Firefox);
+    // fall back to MP4 (Safari).
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+      'audio/mpeg',
+    ];
+    for (const t of candidates) {
+      if (MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return ''; // browser default
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        // reader.result is a data: URL like "data:audio/webm;base64,XXXX"
+        // We strip everything before the comma to get the raw base64.
+        const s = reader.result;
+        const i = s.indexOf(',');
+        resolve(i >= 0 ? s.slice(i + 1) : s);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function fileExtensionFor(mime) {
+    if (!mime) return 'webm';
+    if (mime.includes('webm')) return 'webm';
+    if (mime.includes('mp4'))  return 'm4a';
+    if (mime.includes('mpeg')) return 'mp3';
+    return 'webm';
+  }
+
+  function fmtTime(secs) {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function startTimer() {
+    startTime = Date.now();
+    timerEl.classList.add('recording');
+    timerEl.textContent = '0:00';
+    timerInterval = setInterval(() => {
+      timerEl.textContent = fmtTime((Date.now() - startTime) / 1000);
+    }, 250);
+    // Auto-stop at the cap — protects people who hit record and walk away.
+    maxTimeout = setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        setStatus(`Reached the ${CONFIG.MAX_MINUTES}-minute cap; stopping.`, 'info');
+        stopRecording();
+      }
+    }, CONFIG.MAX_MINUTES * 60 * 1000);
+  }
+
+  function stopTimer() {
+    timerEl.classList.remove('recording');
+    if (timerInterval) clearInterval(timerInterval);
+    if (maxTimeout) clearTimeout(maxTimeout);
+    timerInterval = null;
+    maxTimeout = null;
+  }
+
+  async function startRecording() {
+    setStatus('Asking your browser for mic access…', 'info');
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      setStatus("Can't access the mic. Check your browser's site permissions.", 'error');
+      return;
+    }
+    chunks = [];
+    blob = null;
+    audioEl.hidden = true;
+    audioEl.removeAttribute('src');
+
+    const mimeType = pickMimeType();
+    try {
+      mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+    } catch (e) {
+      setStatus("This browser doesn't support audio recording. Try Chrome or Safari.", 'error');
+      stopStream();
+      return;
+    }
+
+    mediaRecorder.ondataavailable = e => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    mediaRecorder.onstop = () => {
+      const usedMime = mediaRecorder.mimeType || mimeType || 'audio/webm';
+      blob = new Blob(chunks, { type: usedMime });
+      audioEl.src = URL.createObjectURL(blob);
+      audioEl.hidden = false;
+      submitBtn.disabled = false;
+      discardBtn.disabled = false;
+      setStatus('Listen back, then submit (or discard and re-record).', 'info');
+      stopStream();
+    };
+    mediaRecorder.onerror = (e) => {
+      setStatus('Recording error: ' + (e.error?.message || 'unknown'), 'error');
+      stopStream();
+      stopTimer();
+      resetButtons();
+    };
+
+    mediaRecorder.start();
+    recordBtn.classList.add('recording');
+    recordBtn.textContent = 'Stop recording';
+    submitBtn.disabled = true;
+    discardBtn.disabled = true;
+    startTimer();
+    setStatus('Recording… speak naturally. Start with your name and who you interviewed.', 'info');
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+    }
+    stopTimer();
+    recordBtn.classList.remove('recording');
+    recordBtn.textContent = 'Re-record';
+  }
+
+  function stopStream() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  function resetButtons() {
+    recordBtn.classList.remove('recording');
+    recordBtn.textContent = 'Start recording';
+    submitBtn.disabled = true;
+    discardBtn.disabled = true;
+  }
+
+  async function submit() {
+    if (!blob) {
+      setStatus('Nothing to submit yet — record first.', 'error');
+      return;
+    }
+    if (CONFIG.APPS_SCRIPT_URL.startsWith('REPLACE_ME')) {
+      setStatus('Backend URL not configured yet — tell Matt or Jenny.', 'error');
+      return;
+    }
+    setStatus('Uploading…', 'info');
+    submitBtn.disabled = true;
+    discardBtn.disabled = true;
+    recordBtn.disabled = true;
+
+    const ext  = fileExtensionFor(blob.type);
+    const ts   = new Date().toISOString().replace(/[:.]/g, '-');
+    const name = `${ts}__${candidate.id}.${ext}`;
+
+    // Apps Script's doPost can't reliably read binary file parts out of a
+    // multipart upload. Easiest fix: base64-encode the audio and send it
+    // as a normal form field. Inflates payload ~33% — well under the 50MB
+    // Apps Script POST cap for any sane recording length.
+    const base64 = await blobToBase64(blob);
+
+    const fd = new FormData();
+    fd.append('candidate_id', candidate.id);
+    fd.append('candidate_name', candidate.name);
+    fd.append('filename', name);
+    fd.append('mime', blob.type || 'audio/webm');
+    fd.append('audio_b64', base64);
+
+    try {
+      // multipart/form-data is a CORS-safelisted content type, so this
+      // request goes out without preflight. Apps Script doesn't return
+      // CORS headers, so we use no-cors mode — the request lands, we
+      // just can't read the response. Success is implied by the absence
+      // of a network error. Jenny verifies in Drive on pickup.
+      await fetch(CONFIG.APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        body: fd,
+      });
+      setStatus(`Submitted — thank you. (You can record another or move to the next candidate.)`, 'success');
+      // Reset the card for another take if they want.
+      blob = null;
+      audioEl.hidden = true;
+      audioEl.removeAttribute('src');
+      timerEl.textContent = '0:00';
+      recordBtn.disabled = false;
+      recordBtn.textContent = 'Start recording';
+    } catch (e) {
+      setStatus('Upload failed. Check your connection and try again.', 'error');
+      submitBtn.disabled = false;
+      discardBtn.disabled = false;
+      recordBtn.disabled = false;
+    }
+  }
+
+  function discard() {
+    blob = null;
+    chunks = [];
+    audioEl.hidden = true;
+    audioEl.removeAttribute('src');
+    timerEl.textContent = '0:00';
+    submitBtn.disabled = true;
+    discardBtn.disabled = true;
+    recordBtn.disabled = false;
+    recordBtn.textContent = 'Start recording';
+    setStatus("Discarded. Hit record when you're ready.", 'info');
+  }
+
+  recordBtn.addEventListener('click', () => {
+    if (recordBtn.classList.contains('recording')) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+  submitBtn.addEventListener('click', submit);
+  discardBtn.addEventListener('click', discard);
+}
+
+/* =====================================================================
+ * Render all candidates
+ * ===================================================================== */
+const container = document.getElementById('candidates');
+CANDIDATES.forEach(c => container.appendChild(renderCandidate(c)));
+</script>
+</body>
+</html>
