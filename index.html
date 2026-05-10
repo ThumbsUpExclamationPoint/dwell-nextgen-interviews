@@ -308,30 +308,11 @@ const CONFIG = {
   MAX_MINUTES: 15,
 };
 
-/* Candidate registry. Each entry has:
- *   id        — slug used as the candidate identifier in uploads
- *   name      — display name
- *   driveUrl  — link to the candidate's materials folder (resume, etc.)
- *
- * Order = alphabetical by first name (matches Drive folder order).
- */
-const CANDIDATES = [
-  { id: "chris-miller",      name: "Chris Miller",          driveUrl: "https://drive.google.com/drive/folders/1qcCOhY-IbQFbDNSwPBcvxUtQT0Pugl1c" },
-  { id: "daniel-kim",        name: "Daniel Kim",            driveUrl: "https://drive.google.com/drive/folders/133Az_SPquxfHNailx61kXiwUt1FQ81Vg" },
-  { id: "donoven-rice",      name: "Donoven Rice",          driveUrl: "https://drive.google.com/drive/folders/1EZ7rDRx_tYiihvqHWAAk59g6el0gaMhS" },
-  { id: "jared-gallardo",    name: "Jared Gallardo",        driveUrl: "https://drive.google.com/drive/folders/14MRwRuRqClNlE1aV4PRPAwKF1uGhPHjR" },
-  { id: "jonas-bond",        name: "Jonas Bond",            driveUrl: "https://drive.google.com/drive/folders/1c2qkuS143ykufqQBVYvoRZ8N2H1suDMQ" },
-  { id: "kenneth-kenny-cook",name: "Kenneth “Kenny” Cook", driveUrl: "https://drive.google.com/drive/folders/1SoiV34en6PC_ht5j08DivfbIUok7uRXc" },
-  { id: "kyal-mcmillan",     name: "Kyal McMillan",         driveUrl: "https://drive.google.com/drive/folders/1UCgcviiAVZ_vUPSn83lE1Xpk5earOkN1" },
-  { id: "nicholas-feyma",    name: "Nicholas Feyma",        driveUrl: "https://drive.google.com/drive/folders/1dNsMU4fsHkozussACndY7pUcT82Q8qT6" },
-  { id: "peter-gabra",       name: "Peter Gabra",           driveUrl: "https://drive.google.com/drive/folders/1cxgyukRwgfilZ3wWnCNsqAO69L5vuYKs" },
-  { id: "saleem-bhayani",    name: "Saleem Bhayani",        driveUrl: "https://drive.google.com/drive/folders/15INlnkokPzteJHt2Ei_VrluKYsf5kUzQ" },
-  { id: "tiffany-dowdy",     name: "Tiffany Dowdy",         driveUrl: "https://drive.google.com/drive/folders/1Fxf8fv1DM5lWSsFJSsBwj43xjkCkTycK" },
-  // End-to-end test candidate. Safe to leave in until the search team
-  // starts using the page, then remove this entry from both index.html
-  // (CANDIDATES) and apps-script/Code.gs (CANDIDATE_FOLDERS).
-  { id: "test-candidate",    name: "Test Candidate",        driveUrl: "https://drive.google.com/drive/folders/1djHSrcBzyqkXtw69QcFZQHs7I9IjrwB8" },
-];
+/* No static candidate list — the page fetches it from the Apps Script    */
+/* backend at runtime via JSONP. Source of truth is the search root in    */
+/* Drive: each subfolder is a candidate, the folder name is their display */
+/* name, and the slug is derived deterministically. To add a candidate,   */
+/* create a folder in Drive. To remove, trash it. Refresh the page.       */
 
 /* =====================================================================
  * Password gate
@@ -655,10 +636,110 @@ function attachRecorder(card, candidate) {
 }
 
 /* =====================================================================
- * Render all candidates
+ * Fetch candidates from Apps Script and render
+ *
+ * JSONP pattern: we inject a <script> tag pointing at the Apps Script
+ * URL with a callback parameter. Apps Script returns
+ *   __nextgenCandidates_<id>([{slug, name, materials_url}, ...])
+ * which executes immediately when the script loads.
+ *
+ * sessionStorage caches the result for the duration of the browser tab
+ * so subsequent renders (e.g. after the gate unlocks on a return visit)
+ * are instant.
  * ===================================================================== */
 const container = document.getElementById('candidates');
-CANDIDATES.forEach(c => container.appendChild(renderCandidate(c)));
+
+function showLoading() {
+  container.innerHTML = '<div class="status info" style="padding: 20px; text-align: center;">Loading candidates…</div>';
+}
+
+function showError(msg) {
+  container.innerHTML = '<div class="status error" style="padding: 20px; text-align: center;">'
+    + 'Couldn\'t load the candidate list. ' + msg + '<br>'
+    + '<button type="button" onclick="window.location.reload()" style="margin-top: 12px;">Retry</button>'
+    + '</div>';
+}
+
+function renderCandidates(list) {
+  container.innerHTML = '';
+  if (!list || list.length === 0) {
+    container.innerHTML = '<div class="status info" style="padding: 20px; text-align: center;">No candidates yet — add a folder to the search-root in Drive.</div>';
+    return;
+  }
+  list.forEach(c => {
+    container.appendChild(renderCandidate({
+      id:       c.slug,
+      name:     c.name,
+      driveUrl: c.materials_url,
+    }));
+  });
+}
+
+function fetchCandidates() {
+  // Use cached list if we have one for this session.
+  try {
+    const cached = sessionStorage.getItem('nextgen_candidates');
+    if (cached) {
+      renderCandidates(JSON.parse(cached));
+      // Also refresh in the background so newly-added candidates show up
+      // by the next gate-unlock without forcing a hard refresh.
+      jsonpFetchCandidates(/*background*/true);
+      return;
+    }
+  } catch (e) { /* ignore corrupt cache */ }
+
+  showLoading();
+  jsonpFetchCandidates(/*background*/false);
+}
+
+function jsonpFetchCandidates(background) {
+  const callbackName = '__nextgenCandidates_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+  const timeoutMs = 12000;
+  let done = false;
+
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    delete window[callbackName];
+    if (script.parentNode) script.parentNode.removeChild(script);
+  };
+
+  window[callbackName] = function(list) {
+    cleanup();
+    try { sessionStorage.setItem('nextgen_candidates', JSON.stringify(list)); } catch (e) {}
+    renderCandidates(list);
+  };
+
+  const script = document.createElement('script');
+  script.src = CONFIG.APPS_SCRIPT_URL + '?action=candidates&callback=' + callbackName;
+  script.onerror = () => {
+    cleanup();
+    if (!background) showError('The Apps Script backend is unreachable.');
+  };
+  document.head.appendChild(script);
+
+  setTimeout(() => {
+    if (!done) {
+      cleanup();
+      if (!background) showError('Timed out waiting for the candidate list.');
+    }
+  }, timeoutMs);
+}
+
+// First render is triggered when the gate unlocks. If the user is already
+// authed (sessionStorage flag set), the gate's init code already revealed
+// #main — we should fetch right away. Otherwise wait for the unlock event.
+function ensureCandidatesRendered() {
+  if (!document.getElementById('main').hidden) {
+    fetchCandidates();
+  }
+}
+ensureCandidatesRendered();
+// Hook the gate's tryUnlock path: rerun the check after any gate interaction.
+document.getElementById('gate-submit').addEventListener('click',
+  () => setTimeout(ensureCandidatesRendered, 0));
+document.getElementById('gate-input').addEventListener('keydown',
+  e => { if (e.key === 'Enter') setTimeout(ensureCandidatesRendered, 0); });
 </script>
 </body>
 </html>

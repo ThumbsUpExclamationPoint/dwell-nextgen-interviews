@@ -19,50 +19,39 @@
  */
 
 // -----------------------------------------------------------------------
-// Configuration — two parallel maps keyed by the same candidate slug.
+// Configuration
+// -----------------------------------------------------------------------
+//
+// Source of truth for the candidate list = subfolders of SEARCH_ROOT_ID.
+// Each subfolder is one candidate (folder name = display name, slug
+// derived deterministically from the name). Recordings live as parallel
+// subfolders under REVIEWER_RECORDINGS_ROOT_ID; missing recording folders
+// are auto-created on first upload.
+//
+// Workflow for adding/removing candidates:
+//   • Add:    create a new folder in SEARCH_ROOT_ID, drop materials in.
+//   • Remove: right-click the folder → Move to Trash.
+// The hub picks up the change on next page refresh (cache TTL = 5 min).
 // -----------------------------------------------------------------------
 
-// Slug → Drive folder ID where uploaded recordings are saved.
-const CANDIDATE_FOLDERS = {
-  "chris-miller":       "1l14KnQt2uDQz_SfZF1j1W29BsLt5t4Gz",
-  "daniel-kim":         "1fJsGvzsXERhu4ntTzuSQmTkXOvU1IIo6",
-  "donoven-rice":       "1tNzghn9_yWaElEFMC18p4LzAUbXJhxy9",
-  "jared-gallardo":     "1MG6AJxV0j2XTP9MLSHnIVIPVyNWn8D9F",
-  "jonas-bond":         "1skaYal-jLmxXOS0anNu3EWQQWEGJVwxS",
-  "kenneth-kenny-cook": "1dhCTc4uJ8EZaTJUjLcApgvOj5rkPdBns",
-  "kyal-mcmillan":      "15i_kzQo5N6mfRQSHsyBIaSFk2HdzWlGM",
-  "nicholas-feyma":     "1ljDW-tDFcabJQ-pu453YW5C5nFwTw61p",
-  "peter-gabra":        "1TCfsKBcGJdWBJmtp45I7wgorgIu7e1pW",
-  "saleem-bhayani":     "1yJvGobbqALSfJ_7p3zlUTKjvgwsXNcfs",
-  "tiffany-dowdy":      "12u_TkGJMMJ-JVCN9RjyfY8bn1Qxi3AhH",
-  // End-to-end test target. Remove once the search team starts using the
-  // page (also remove from CANDIDATES in index.html).
-  "test-candidate":     "1g9WzXj1gOFlciAls4djlS9xmf5YKDcsG",
-};
+const SEARCH_ROOT_ID              = "1NWsguOnC_ISBPZpe7azxJxlw6QiOMdbQ";
+const REVIEWER_RECORDINGS_ROOT_ID = "1AznoGEFFBOVc0sOu1wjqWmT0-GDU4-Tb";
 
-// Slug → Drive folder ID of the candidate's *materials* folder (where
-// the resume etc. live). The "Reviewer Reflections" Google Doc is
-// auto-created and lived inside this folder so reviewer transcripts
-// sit alongside the candidate's own materials.
-const CANDIDATE_MATERIAL_FOLDERS = {
-  "chris-miller":       "1qcCOhY-IbQFbDNSwPBcvxUtQT0Pugl1c",
-  "daniel-kim":         "133Az_SPquxfHNailx61kXiwUt1FQ81Vg",
-  "donoven-rice":       "1EZ7rDRx_tYiihvqHWAAk59g6el0gaMhS",
-  "jared-gallardo":     "14MRwRuRqClNlE1aV4PRPAwKF1uGhPHjR",
-  "jonas-bond":         "1c2qkuS143ykufqQBVYvoRZ8N2H1suDMQ",
-  "kenneth-kenny-cook": "1SoiV34en6PC_ht5j08DivfbIUok7uRXc",
-  "kyal-mcmillan":      "1UCgcviiAVZ_vUPSn83lE1Xpk5earOkN1",
-  "nicholas-feyma":     "1dNsMU4fsHkozussACndY7pUcT82Q8qT6",
-  "peter-gabra":        "1cxgyukRwgfilZ3wWnCNsqAO69L5vuYKs",
-  "saleem-bhayani":     "15INlnkokPzteJHt2Ei_VrluKYsf5kUzQ",
-  "tiffany-dowdy":      "1Fxf8fv1DM5lWSsFJSsBwj43xjkCkTycK",
-  "test-candidate":     "1djHSrcBzyqkXtw69QcFZQHs7I9IjrwB8",
-};
+// Folders inside SEARCH_ROOT_ID with these names are NOT candidates —
+// they're organizational. Add to this list if you ever stash drafts,
+// archives, etc. inside the search root.
+const SKIP_FOLDER_NAMES = ["Reviewer Recordings"];
 
 // The single Doc filename used per candidate. If a Doc with this name
 // doesn't exist in the candidate's materials folder, the /append route
 // creates one; otherwise it appends to the existing Doc.
 const REFLECTIONS_DOC_NAME = "Reviewer Reflections";
+
+// PropertiesService cache TTL for the slug→folders resolution map.
+// 5 minutes balances "page loads are fast" against "new candidates
+// appear quickly without a hard refresh."
+const CANDIDATE_CACHE_TTL_SEC = 300;
+const CANDIDATE_CACHE_KEY     = "candidates_v1";
 
 // Optional: also write a row to a Drive sheet for an audit trail. Set this
 // to the file ID of a Google Sheet to enable, or leave empty to skip.
@@ -98,12 +87,36 @@ function authorize() {
 }
 
 /**
- * GET — simple health check so Matt can sanity-check the deploy URL by
- * pasting it in a browser. Returns plain text.
+ * GET — two routes:
+ *
+ *   ?action=candidates&callback=fnName
+ *     → JSONP. Returns the live candidate list discovered from
+ *       SEARCH_ROOT_ID. The page uses this on load to render cards
+ *       dynamically. JSONP because Apps Script web apps don't set CORS
+ *       headers and the page needs to *read* the response.
+ *
+ *   (no params)
+ *     → plain-text health check.
  */
 function doGet(e) {
+  const p = (e && e.parameter) || {};
+
+  if (p.action === "candidates") {
+    const list = listCandidates();
+    if (p.callback) {
+      const callback = String(p.callback).replace(/[^A-Za-z0-9_$.]/g, "");
+      return ContentService
+        .createTextOutput(callback + "(" + JSON.stringify(list) + ")")
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return ContentService
+      .createTextOutput(JSON.stringify(list))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
   return ContentService
     .createTextOutput("Dwell Next Gen reviewer ingest — alive.\n" +
+                      "GET ?action=candidates&callback=fn for the live list.\n" +
                       "POST audio_b64, candidate_id, mime, filename to upload.")
     .setMimeType(ContentService.MimeType.TEXT);
 }
@@ -156,12 +169,12 @@ function handleAudioUpload(p) {
   if (!candidateId)  return textResponse("err: missing candidate_id");
   if (!audioB64)     return textResponse("err: missing audio_b64");
 
-  const folderId = CANDIDATE_FOLDERS[candidateId];
-  if (!folderId) return textResponse("err: unknown candidate_id " + candidateId);
+  const candidate = resolveCandidate(candidateId);
+  if (!candidate) return textResponse("err: unknown candidate_id " + candidateId);
 
   const bytes = Utilities.base64Decode(audioB64);
   const blob  = Utilities.newBlob(bytes, mime, filename);
-  const folder = DriveApp.getFolderById(folderId);
+  const folder = DriveApp.getFolderById(candidate.recordingsId);
   const file = folder.createFile(blob);
 
   if (AUDIT_SHEET_ID) {
@@ -203,12 +216,10 @@ function handleAppendTranscript(p) {
   if (!candidateId)  return textResponse("err: missing candidate_id");
   if (!transcript)   return textResponse("err: missing transcript");
 
-  const materialsFolderId = CANDIDATE_MATERIAL_FOLDERS[candidateId];
-  if (!materialsFolderId) {
-    return textResponse("err: unknown candidate_id " + candidateId);
-  }
+  const candidate = resolveCandidate(candidateId);
+  if (!candidate) return textResponse("err: unknown candidate_id " + candidateId);
 
-  const doc = findOrCreateReflectionsDoc(materialsFolderId, candidateName);
+  const doc = findOrCreateReflectionsDoc(candidate.materialsId, candidateName);
   const body = doc.getBody();
 
   // Format the human-readable date in Pacific time. Apps Script's
@@ -289,12 +300,10 @@ function handleUpdateSynthesis(p) {
   if (!candidateId)  return textResponse("err: missing candidate_id");
   if (!synthesisMd)  return textResponse("err: missing synthesis_md");
 
-  const materialsFolderId = CANDIDATE_MATERIAL_FOLDERS[candidateId];
-  if (!materialsFolderId) {
-    return textResponse("err: unknown candidate_id " + candidateId);
-  }
+  const candidate = resolveCandidate(candidateId);
+  if (!candidate) return textResponse("err: unknown candidate_id " + candidateId);
 
-  const doc = findOrCreateReflectionsDoc(materialsFolderId, candidateName);
+  const doc = findOrCreateReflectionsDoc(candidate.materialsId, candidateName);
   const body = doc.getBody();
 
   // Find the index of the first reflection — it's the boundary between
@@ -356,6 +365,143 @@ function handleUpdateSynthesis(p) {
   console.log("synthesis updated for " + candidateId +
               " (" + lines.length + " lines) → " + doc.getUrl());
   return textResponse("ok: " + doc.getId());
+}
+
+// -----------------------------------------------------------------------
+// Live candidate discovery — Drive folder = source of truth
+// -----------------------------------------------------------------------
+//
+// listCandidates() walks SEARCH_ROOT_ID and returns the public-facing
+// list (slug + display name + materials Drive URL). resolveCandidate(slug)
+// returns the same data PLUS the recordings folder ID, auto-creating the
+// recordings subfolder if it doesn't exist yet. Both are cached in
+// PropertiesService for CANDIDATE_CACHE_TTL_SEC seconds; mutations call
+// invalidateCandidateCache() to force a re-walk.
+
+function listCandidates() {
+  const cached = readCandidateCache();
+  if (cached) {
+    // The cached value is the resolution map (full {slug, name, materialsId,
+    // recordingsId}). Project to the public shape.
+    return Object.values(cached).map(c => ({
+      slug: c.slug,
+      name: c.name,
+      materials_url: "https://drive.google.com/drive/folders/" + c.materialsId,
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  // No cache → walk Drive, populate cache, return the list.
+  const map = walkAndCacheCandidates();
+  return Object.values(map).map(c => ({
+    slug: c.slug,
+    name: c.name,
+    materials_url: "https://drive.google.com/drive/folders/" + c.materialsId,
+  })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function resolveCandidate(slug) {
+  if (!slug) return null;
+  const cached = readCandidateCache();
+  if (cached && cached[slug]) return cached[slug];
+
+  // Cache miss — walk Drive fresh.
+  const map = walkAndCacheCandidates();
+  return map[slug] || null;
+}
+
+function walkAndCacheCandidates() {
+  const searchRoot = DriveApp.getFolderById(SEARCH_ROOT_ID);
+  const recordingsRoot = DriveApp.getFolderById(REVIEWER_RECORDINGS_ROOT_ID);
+
+  // Index existing recording subfolders by name so we don't have to
+  // search Drive once per candidate.
+  const recordingsByName = {};
+  const recItr = recordingsRoot.getFolders();
+  while (recItr.hasNext()) {
+    const f = recItr.next();
+    recordingsByName[f.getName()] = f;
+  }
+
+  const map = {};
+  const itr = searchRoot.getFolders();
+  while (itr.hasNext()) {
+    const folder = itr.next();
+    const name = folder.getName();
+    if (SKIP_FOLDER_NAMES.indexOf(name) >= 0) continue;
+
+    const slug = slugify(name);
+    if (!slug) continue;
+
+    // Find or create the matching recording subfolder.
+    let recFolder = recordingsByName[name];
+    if (!recFolder) {
+      recFolder = recordingsRoot.createFolder(name);
+      recordingsByName[name] = recFolder;
+    }
+
+    map[slug] = {
+      slug: slug,
+      name: name,
+      materialsId: folder.getId(),
+      recordingsId: recFolder.getId(),
+    };
+  }
+
+  writeCandidateCache(map);
+  return map;
+}
+
+function readCandidateCache() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const raw = props.getProperty(CANDIDATE_CACHE_KEY);
+    if (!raw) return null;
+    const wrapped = JSON.parse(raw);
+    if (!wrapped || !wrapped.expires_at) return null;
+    if (Date.now() > wrapped.expires_at) return null;
+    return wrapped.map;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeCandidateCache(map) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty(CANDIDATE_CACHE_KEY, JSON.stringify({
+      expires_at: Date.now() + CANDIDATE_CACHE_TTL_SEC * 1000,
+      map: map,
+    }));
+  } catch (e) {
+    console.warn("candidate cache write failed: " + e);
+  }
+}
+
+/**
+ * Manually clear the candidate cache. Useful if you've just added or
+ * removed a folder and don't want to wait up to 5 minutes for the cache
+ * to expire. Run this from the function dropdown → ▶ Run.
+ */
+function refreshCandidates() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty(CANDIDATE_CACHE_KEY);
+  const map = walkAndCacheCandidates();
+  console.log("Refreshed cache with " + Object.keys(map).length +
+              " candidate(s): " + Object.keys(map).sort().join(", "));
+  return map;
+}
+
+/**
+ * Slugify a candidate display name to a URL-safe identifier. Must
+ * match the slugify() algorithm in index.html so client and server
+ * agree on the same slug for a given name.
+ */
+function slugify(name) {
+  return String(name)
+    .toLowerCase()
+    .replace(/["']/g, "")        // strip quotes (e.g. Kenneth "Kenny" Cook)
+    .replace(/[^\w\s-]/g, "")    // strip remaining punctuation
+    .replace(/[\s_]+/g, "-")     // whitespace/underscores → hyphen
+    .replace(/^-+|-+$/g, "");    // trim leading/trailing hyphens
 }
 
 function textResponse(msg) {
